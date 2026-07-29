@@ -1,0 +1,19 @@
+Loading Kronos-small + Kronos-Tokenizer-base ...
+
+=== BTCUSDT ===
+  [BTCUSDT] 2764 blocks x 24 bars (context=168)
+    [BTCUSDT] 160/2764 blocks forecast (351s elapsed)
+    [BTCUSDT] 320/2764 blocks forecast (662s elapsed)
+    [BTCUSDT] 480/2764 blocks forecast (976s elapsed)
+    [BTCUSDT] 640/2764 blocks forecast (1287s elapsed)
+    [BTCUSDT] 800/2764 blocks forecast (1600s elapsed)
+    [BTCUSDT] 960/2764 blocks forecast (1917s elapsed)
+    [BTCUSDT] 1120/2764 blocks forecast (2235s elapsed)
+    [BTCUSDT] 1280/2764 blocks forecast (2558s elapsed)
+    [BTCUSDT] 1440/2764 blocks forecast (2880s elapsed)
+    [BTCUSDT] 1600/2764 blocks forecast (3202s elapsed)
+    [BTCUSDT] 1760/2764 blocks forecast (3520s elapsed)
+    [BTCUSDT] 1920/2764 blocks forecast (3836s elapsed)
+    [BTCUSDT] 2080/2764 blocks forecast (4152s elapsed)
+    [BTCUSDT] 2240/2764 blocks forecast (4467s elapsed)
+    [BTCUSDT] 2400/2764 blocks forecast (4783s elapsed)

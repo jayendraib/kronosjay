@@ -1,0 +1,288 @@
+rl_trading/ — PROGRESS NOTES
+=============================
+Last updated: 2026-07-29
+
+WHAT THIS FOLDER IS ACTUALLY FOR (read this first)
+----------------------------------------------------
+The folder is named "rl_trading" but there is NO reinforcement learning here —
+no environment, no agent, no policy, no reward function. That was the original
+ask ("build an RL environment that learns from wrong moves and gives penalty"),
+but we deliberately rejected full RL as impractical:
+  - Kronos-small's checkpoint has a fixed 6-column input baked in; it can't be
+    retrained/fine-tuned without a full retrain (no GPU available, not feasible).
+  - RL would also not give a legible, per-trade explanation of WHY a trade failed.
+
+Instead we're doing META-LABELING: run the existing fixed rule-based strategy,
+log every trade it takes with its entry conditions + win/loss outcome, then
+train a supervised classifier on top of that log to predict win-probability
+and explain (via SHAP) which entry conditions correlate with losses. The
+classifier acts as a learned veto gate in front of the rule-based filter —
+it never touches Kronos itself, which stays frozen throughout.
+
+THE BASE STRATEGY (fixed, not learned) — "Filtered + Hysteresis"
+------------------------------------------------------------------
+For each bar: take Kronos-small's directional forecast only when it AGREES
+with both:
+  - SMA20 trend sign (price above/below its 20-period SMA)
+  - MACD(12,26,9) histogram sign
+  and the predicted move is >= 0.05%. Otherwise stay flat.
+Once in a position, hold >= 3 bars before the filter is allowed to change it
+again (see apply_hysteresis() in the walk-forward scripts).
+Slippage: 0.20% charged per side (entry + exit).
+
+FILES IN THIS FOLDER
+---------------------
+fetch_multi_coin_data.py       - pulls daily OHLCV for BTC/ETH/BNB/XRP/LTC from
+                                  2018-06-01 (buffer before 2019-01-01 scoring
+                                  start) -> output/{SYMBOL}_1d_raw.csv
+fetch_multi_coin_data_1h.py    - same but hourly, from 2018-11-01 buffer
+                                  -> output/{SYMBOL}_1h_raw.csv
+
+run_walkforward.py             - DAILY walk-forward backtest. Forecasts each
+                                  5-bar block with Kronos-small (context=90),
+                                  applies the Filtered+Hysteresis strategy,
+                                  extracts one row per trade to a trade log.
+                                  STATUS: COMPLETE.
+                                  -> output/{SYMBOL}_1d_results.csv (per-bar)
+                                  -> output/{SYMBOL}_1d_trades.csv (per-symbol trades)
+                                  -> output/all_coins_trade_log.csv (combined,
+                                     1398 trades, 2019-01-01 to 2026-07-26)
+
+run_walkforward_1h.py          - HOURLY counterpart (context=168 bars = 7 days,
+                                  block=24 bars = 1 day). Same schema, separate
+                                  _1h_ output files so it doesn't clobber daily.
+                                  STATUS: STILL RUNNING in the background as of
+                                  2026-07-29 ~12:50 (started ~12:06). This is
+                                  ~5x the compute of the daily run (~2500+
+                                  blocks/coin x 5 coins, CPU-only, no GPU) so
+                                  it is expected to take several hours total.
+                                  Check with: ps aux | grep run_walkforward_1h
+                                  Progress log: output/run_log_1h.txt
+                                  When done, it produces:
+                                  -> output/{SYMBOL}_1h_results.csv
+                                  -> output/{SYMBOL}_1h_trades.csv
+                                  -> output/all_coins_trade_log_1h.csv (combined)
+                                  DO NOT re-run/kill/restart this while it's
+                                  still going — check the process/output file
+                                  first.
+
+train_meta_label.py            - THE META-LABELING CLASSIFIER (new, built
+                                  2026-07-29). Takes a trade-log CSV
+                                  (--trade-log) and output dir (--output-dir),
+                                  and:
+                                    1. builds features from predicted_move_pct
+                                       _at_entry, sma_dist_pct_at_entry,
+                                       macd_hist_at_entry,
+                                       macd_hist_slope_at_entry, direction
+                                       (NOT holding_bars/realized_return_pct —
+                                       those are only known after the trade
+                                       closes, using them would leak the label)
+                                    2. chronological 75/25 train/test split
+                                       (sorted by entry_timestamp — NOT random,
+                                       this is time-series data)
+                                    3. trains a shallow/regularized XGBoost
+                                       classifier (max_depth=3, n_estimators=80,
+                                       min_child_weight=5, reg_lambda=2) to
+                                       predict win/loss
+                                    4. evaluates accuracy/precision/recall/
+                                       ROC-AUC against the baseline (taking
+                                       every rule-filtered trade)
+                                    5. sweeps probability thresholds to see
+                                       whether vetoing low-confidence trades
+                                       (i.e. only taking trades the meta-model
+                                       is confident about) improves win rate
+                                       AND total return, not just win rate at
+                                       the cost of volume
+                                    6. runs SHAP on the test set's losing
+                                       trades specifically to explain which
+                                       entry conditions the strategy tends to
+                                       lose on
+                                  Requires: scikit-learn, xgboost, shap,
+                                  matplotlib (installed into .venv via
+                                  `uv pip install --python .venv/bin/python ...`
+                                  on 2026-07-29 — were NOT in requirements.txt
+                                  before this).
+                                  Run with:
+                                    .venv/bin/python examples/rl_trading/train_meta_label.py \
+                                      --trade-log examples/rl_trading/output/all_coins_trade_log.csv \
+                                      --output-dir examples/rl_trading/output/meta_label/daily
+
+RESULTS SO FAR (daily data, 350 held-out test trades, 2024-09-24 to 2026-07-26)
+---------------------------------------------------------------------------------
+Baseline (take every rule-filtered trade, no meta-label):
+  350 trades, 63.4% win rate, +543% total return (sum of per-trade returns,
+  NOT compounded — matches the convention used elsewhere in this repo)
+
+Meta-model (XGBoost) on the same held-out trades:
+  67.7% accuracy, ROC-AUC 0.714, precision 0.70, recall 0.86
+
+Threshold sweep (veto trades below this predicted win-probability):
+  threshold  trades kept   win rate   total return
+  0.00       350 (100%)    63.4%      543%   <- baseline, no filtering
+  0.50       275 (79%)     69.8%      647%
+  0.55       224 (64%)     74.6%      666%   <- BEST: better win rate AND
+                                                  better total return than
+                                                  baseline
+  0.60       186 (53%)     77.4%      609%
+  0.65       144 (41%)     83.3%      579%
+  0.70       102 (29%)     85.3%      447%
+  0.75        54 (15%)     88.9%      278%
+  0.80        23 ( 7%)     91.3%      191%   <- too aggressive, cuts good
+                                                  volume, total return drops
+  Takeaway: 0.55-0.60 threshold is the practical sweet spot. Above that,
+  win rate keeps climbing but you're vetoing so much volume that total
+  return falls even though each remaining trade is safer.
+
+SHAP findings (what conditions the strategy loses on, daily data):
+  Ranked by mean SHAP contribution toward "loss" on the test set's actual
+  losing trades:
+    1. sma_dist_pct_at_entry      (entering far from SMA20 -> more likely
+                                    to lose; strongest signal)
+    2. predicted_move_pct_at_entry (small/weak Kronos-predicted move ->
+                                    more likely to lose)
+    3. macd_hist_slope_at_entry    (ambiguous/weak MACD momentum -> more
+                                    likely to lose)
+    4. macd_hist_at_entry          (smaller effect)
+    5. direction (long vs short)   ZERO contribution — confirmed via
+                                    model.feature_importances_, this is a
+                                    clean null result (no long/short bias),
+                                    not a bug.
+
+Output artifacts from the daily run, all under
+examples/rl_trading/output/meta_label/daily/:
+  meta_label_model.joblib              - trained XGBoost model
+  shap_summary_all_test_trades.png     - SHAP summary, all test trades
+  shap_summary_losing_test_trades.png  - SHAP summary, losing trades only
+  threshold_backtest.csv               - full threshold sweep table
+  summary.json                         - all metrics above in machine-readable form
+
+WHAT'S NOT DONE YET / NEXT STEPS
+-----------------------------------
+1. Hourly walk-forward backtest (run_walkforward_1h.py) is still running in
+   the background. Once output/all_coins_trade_log_1h.csv exists, run:
+     .venv/bin/python examples/rl_trading/train_meta_label.py \
+       --trade-log examples/rl_trading/output/all_coins_trade_log_1h.csv \
+       --output-dir examples/rl_trading/output/meta_label/hourly
+   This is the user's actual primary target (they specifically asked for the
+   1h timeframe) — the daily run above was just to validate the pipeline
+   works end-to-end while waiting on the hourly backtest to finish.
+2. The 0.55-0.6 threshold finding is from DAILY data only; hourly may show a
+   different sweet spot (more trades = more statistical power, but hourly
+   noise/microstructure could behave differently from daily trend-following).
+   Don't assume the same threshold transfers — re-run the sweep on hourly
+   once available.
+3. Nothing here has been wired into a live/paper-trading loop — this is all
+   backtest/research so far. If the hourly meta-label result also looks good
+   (better win rate AND return than baseline at some threshold), the next
+   real decision is whether/how to actually apply the veto gate in a live
+   forward-testing setup, not just backtest it.
+
+END-TO-END ARCHITECTURE (how to use this whole flow going forward)
+----------------------------------------------------------------------
+This is the full pipeline, stage by stage. Kronos-small itself is FROZEN
+the entire way through — nothing in this flow ever updates its weights.
+Only the meta-label classifier gets retrained over time.
+
+  STAGE 1: DATA
+  -------------
+  fetch_multi_coin_data.py / fetch_multi_coin_data_1h.py
+    Binance OHLCV -> output/{SYMBOL}_{1d|1h}_raw.csv
+    (buffer period included so there's enough history for context+warm-up)
+
+                              |
+                              v
+  STAGE 2: FROZEN FORECASTER
+  ---------------------------
+  run_walkforward.py / run_walkforward_1h.py
+    Kronos-small (NeoQuasar/Kronos-small, frozen weights) forecasts each
+    walk-forward block from the raw OHLCV.
+    -> output/{SYMBOL}_{1d|1h}_results.csv  (per-bar: actual vs predicted)
+
+                              |
+                              v
+  STAGE 3: FIXED RULE FILTER ("Filtered + Hysteresis")
+  -------------------------------------------------------
+  Same script, add_indicators_and_strategy() + apply_hysteresis():
+    take Kronos's direction only if SMA20 trend + MACD histogram agree
+    with it and predicted move >= 0.05%; hold >= 3 bars once entered.
+  This is still a FIXED, hand-written rule — nothing learned yet.
+    -> output/{SYMBOL}_{1d|1h}_trades.csv (one row per trade taken)
+    -> output/all_coins_trade_log{_1h}.csv (all 5 symbols combined)
+
+                              |
+                              v
+  STAGE 4: META-LABEL CLASSIFIER (the ONLY learned part)
+  -----------------------------------------------------------
+  train_meta_label.py
+    Trains on the trade log's entry-time features (sma_dist_pct,
+    predicted_move_pct, macd_hist, macd_hist_slope, direction) to predict
+    win/loss probability, using ONLY a chronological split (train on past,
+    test on future — never shuffle).
+    -> meta_label_model.joblib (the trained gate)
+    -> SHAP plots explaining which entry conditions -> losses
+    -> threshold_backtest.csv (win-rate/return at each veto threshold)
+
+                              |
+                              v
+  STAGE 5: VETO GATE (combine stage 3 + stage 4)
+  ---------------------------------------------------
+  Final decision per bar:
+    IF rule_filter says "flat"          -> stay flat (unchanged from before)
+    IF rule_filter says "long"/"short"  -> ask meta_label_model for
+                                            win-probability on this trade's
+                                            entry features
+        IF probability >= threshold (0.55-0.60 on daily data so far)
+                                         -> take the trade
+        ELSE                             -> veto it, stay flat instead
+  This is the "Kronos learns from its mistakes" behavior in practice:
+  Kronos + the rule filter behave exactly as before, but a learned layer
+  now suppresses the subset of calls that resemble historically bad setups.
+
+  STAGE 6 (NOT BUILT YET): LIVE/PAPER LOOP
+  ---------------------------------------------
+  To actually use this on live data (not just backtest), you'd repeat
+  stages 1-5 on a rolling window each time a new bar closes:
+    1. pull latest OHLCV bar(s)
+    2. Kronos-small forecasts next block from latest context
+    3. rule filter computes desired direction (with hysteresis state
+       carried over from the last live decision)
+    4. if non-flat, extract this bar's entry features and score them
+       with the already-trained meta_label_model.joblib
+    5. apply veto threshold -> final position for this bar
+    6. execute / log the outcome once the trade closes -> append to the
+       trade log so the NEXT meta-model retrain includes it
+  This closes the loop: stage 4's classifier periodically retrains on an
+  ever-growing trade log (daily/weekly/monthly cadence, whatever's
+  practical), so the veto gate keeps adapting to new mistake patterns
+  without ever touching Kronos itself.
+
+  RETRAINING CADENCE (how the "learning" actually happens over time)
+  -----------------------------------------------------------------------
+  Re-run train_meta_label.py periodically as new trades accumulate in the
+  trade log (e.g. monthly). Each retrain:
+    - uses the same chronological train/test split logic
+    - picks up whatever new losing patterns have shown up recently
+    - overwrites meta_label_model.joblib with the refreshed gate
+  This is the entire "learning from mistakes" mechanism in this project —
+  there is no online/continuous learning, just periodic batch retrains of
+  the classifier on an append-only trade log.
+
+  QUICK REFERENCE: reusing this flow for a NEW symbol or timeframe
+  -----------------------------------------------------------------------
+  1. Add the symbol to SYMBOLS in fetch_multi_coin_data(_1h).py and
+     run_walkforward(_1h).py, run the fetch script.
+  2. Run the matching run_walkforward(_1h).py to get a trade log entry
+     for that symbol (it's appended into the combined trade log).
+  3. Re-run train_meta_label.py on the updated combined trade log.
+  4. Check threshold_backtest.csv for the new sweet-spot threshold before
+     assuming the old one (0.55-0.60 on daily) still applies.
+
+HOW TO PICK THIS BACK UP IN A NEW SESSION
+--------------------------------------------
+1. Check if the background backtest finished:
+     ps aux | grep run_walkforward_1h
+     ls -la examples/rl_trading/output/all_coins_trade_log_1h.csv
+2. If it's done and hourly meta-label results don't exist yet, run
+   train_meta_label.py against the hourly log (command above).
+3. Compare hourly results/threshold sweep against the daily numbers in this
+   file before drawing conclusions — don't assume they'll match.

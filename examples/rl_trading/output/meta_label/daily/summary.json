@@ -1,0 +1,87 @@
+{
+  "metrics": {
+    "n_test_trades": 350,
+    "baseline_win_rate": 0.6342857142857142,
+    "model_accuracy": 0.6771428571428572,
+    "model_precision": 0.6981818181818182,
+    "model_recall": 0.8648648648648649,
+    "model_roc_auc": 0.7143158783783783,
+    "confusion_matrix": [
+      [
+        45,
+        83
+      ],
+      [
+        30,
+        192
+      ]
+    ]
+  },
+  "threshold_backtest": [
+    {
+      "threshold": 0.0,
+      "num_trades": 350,
+      "pct_of_test_trades_kept": 1.0,
+      "win_rate": 0.6342857142857142,
+      "total_return_pct": 543.3007513312114
+    },
+    {
+      "threshold": 0.5,
+      "num_trades": 275,
+      "pct_of_test_trades_kept": 0.7857142857142857,
+      "win_rate": 0.6981818181818182,
+      "total_return_pct": 646.8643782558737
+    },
+    {
+      "threshold": 0.55,
+      "num_trades": 224,
+      "pct_of_test_trades_kept": 0.64,
+      "win_rate": 0.7455357142857143,
+      "total_return_pct": 665.9941511371592
+    },
+    {
+      "threshold": 0.6,
+      "num_trades": 186,
+      "pct_of_test_trades_kept": 0.5314285714285715,
+      "win_rate": 0.7741935483870968,
+      "total_return_pct": 608.7320003618004
+    },
+    {
+      "threshold": 0.65,
+      "num_trades": 144,
+      "pct_of_test_trades_kept": 0.4114285714285714,
+      "win_rate": 0.8333333333333334,
+      "total_return_pct": 579.2514842580905
+    },
+    {
+      "threshold": 0.7,
+      "num_trades": 102,
+      "pct_of_test_trades_kept": 0.2914285714285714,
+      "win_rate": 0.8529411764705882,
+      "total_return_pct": 446.88564438953904
+    },
+    {
+      "threshold": 0.75,
+      "num_trades": 54,
+      "pct_of_test_trades_kept": 0.15428571428571428,
+      "win_rate": 0.8888888888888888,
+      "total_return_pct": 277.9615321274577
+    },
+    {
+      "threshold": 0.8,
+      "num_trades": 23,
+      "pct_of_test_trades_kept": 0.06571428571428571,
+      "win_rate": 0.9130434782608695,
+      "total_return_pct": 191.2021785819561
+    }
+  ],
+  "shap": {
+    "mean_shap_on_losing_trades": {
+      "sma_dist_pct_at_entry": -0.11052682250738144,
+      "predicted_move_pct_at_entry": -0.07165783643722534,
+      "macd_hist_slope_at_entry": -0.045029859989881516,
+      "macd_hist_at_entry": -0.02660551108419895,
+      "direction": 0.0
+    }
+  }
+}

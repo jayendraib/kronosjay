@@ -32,6 +32,28 @@ bars before the filter is allowed to change it again (exit to flat or
 flip direction) -- a simple debounce/cooldown, applied as a small state
 machine in `apply_hysteresis`.
 
+VOLUME FILTERS (added on top of the original trend+MACD combo above --
+that combo is untouched and still runs exactly as before as the
+"Filtered+Hysteresis" curve; these add a THIRD curve,
+"Filtered+Volume+Hysteresis", gated by the USE_CMF_FILTER /
+USE_VOLUME_VETO toggles below):
+  - Chaikin Money Flow (CMF, 20-period): a bounded [-1, 1] buying/selling
+    pressure indicator computed from high/low/close/volume. Its sign is
+    already directional (>0 buying pressure, <0 selling), so it slots in
+    as a FOURTH required sign-agreement gate alongside Kronos/trend/MACD,
+    same shape as the existing filters.
+  - Volume regime (rising/falling/flat): current bar's volume vs. its own
+    20-period rolling mean, classified rising (+1)/falling(-1)/flat (0)
+    using a +/-15% band. Unlike CMF this has no natural "direction" to
+    agree with Kronos on -- flat volume just means low conviction behind
+    the move either way -- so it's used as a VETO instead: force the
+    position flat whenever volume is in the flat band, regardless of what
+    every other filter says.
+Volume/high/low aren't in the *_results.csv (that file only has
+timestamp/actual/predicted/block), so they're re-fetched fresh from the
+same Binance klines endpoint backtest_btc_accuracy.py uses and merged in
+by timestamp -- see `fetch_volume_data`.
+
 Indicators are computed over each interval's FULL available history (so
 SMA/MACD have a proper warm-up), then everything is sliced down to a
 specific test window for the actual comparison -- run as a fresh $10,000
@@ -49,8 +71,10 @@ Run after backtest_btc_accuracy.py has produced the *_results.csv files:
     .venv/bin/python examples/pnl_backtest_filtered.py
 """
 import os
+import time
 import numpy as np
 import pandas as pd
+import requests
 import matplotlib.pyplot as plt
 
 OUT_DIR = os.path.join(os.path.dirname(__file__), "accuracy_backtest_output")
@@ -59,6 +83,16 @@ SLIPPAGE_SCENARIOS = [0.20, 0.54]  # percent per side, same as pnl_backtest.py
 TEST_WINDOW_DAYS = 30
 MIN_MOVE_PCT = 0.05  # skip trades where Kronos's predicted move is smaller than this (%)
 MIN_HOLD_BARS = 3  # once in a position, hold at least this many bars before the filter can change it
+
+# --- Volume filter toggles (additive -- both default on, but flip either to
+# False to fall back toward the original trend+MACD-only behavior without
+# touching any logic below) ---
+USE_CMF_FILTER = True     # require CMF sign to also agree (4th sign-agreement gate)
+USE_VOLUME_VETO = True    # force flat whenever volume is in its "flat" band
+CMF_WINDOW = 20
+VOL_MA_WINDOW = 20
+VOL_FLAT_BAND = 0.15  # +/-15% around volume's own rolling mean counts as "flat"
+BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"
 
 INTERVALS = {
     "1d": "Daily",
@@ -87,10 +121,69 @@ def macd_histogram(series, fast=12, slow=26, signal=9):
     return macd_line - signal_line
 
 
+def fetch_volume_data(interval, start_ts, end_ts):
+    """Pull high/low/volume from Binance klines for CMF + volume-regime --
+    not present in *_results.csv, so fetched fresh here (same endpoint/symbol
+    as backtest_btc_accuracy.py) and merged onto the results by timestamp."""
+    start_ms = int(pd.Timestamp(start_ts).timestamp() * 1000)
+    end_ms = int(pd.Timestamp(end_ts).timestamp() * 1000) + 1
+    out = []
+    cur = start_ms
+    while cur < end_ms:
+        params = dict(symbol="BTCUSDT", interval=interval, startTime=cur, endTime=end_ms, limit=1000)
+        resp = requests.get(BINANCE_KLINES_URL, params=params, timeout=20)
+        resp.raise_for_status()
+        batch = resp.json()
+        if not batch:
+            break
+        out.extend(batch)
+        if len(batch) < 1000:
+            break
+        cur = batch[-1][0] + 1
+        time.sleep(0.2)
+    cols = ["open_time", "open", "high", "low", "close", "volume", "close_time",
+            "amount", "trades", "taker_base", "taker_quote", "ignore"]
+    vol_df = pd.DataFrame(out, columns=cols)
+    vol_df["timestamp"] = pd.to_datetime(vol_df["open_time"], unit="ms")
+    for c in ["high", "low", "volume"]:
+        vol_df[c] = vol_df[c].astype(float)
+    return (
+        vol_df[["timestamp", "high", "low", "volume"]]
+        .drop_duplicates("timestamp")
+        .sort_values("timestamp")
+        .reset_index(drop=True)
+    )
+
+
+def cmf(df, window=20):
+    """Chaikin Money Flow: bounded [-1, 1] buying/selling pressure. Sign is
+    directional (>0 buying pressure, <0 selling) -- same shape as macd_dir."""
+    high, low, close, volume = df["high"], df["low"], df["actual"], df["volume"]
+    span = (high - low).replace(0, np.nan)
+    money_flow_mult = (((close - low) - (high - close)) / span).fillna(0.0)
+    money_flow_volume = money_flow_mult * volume
+    return money_flow_volume.rolling(window).sum() / volume.rolling(window).sum()
+
+
+def volume_regime(df, window=20, flat_band=0.15):
+    """Classify each bar's volume vs. its own rolling mean: +1 rising,
+    -1 falling, 0 flat (within +/-flat_band). NaN during warm-up."""
+    vol_ma = df["volume"].rolling(window).mean()
+    ratio = df["volume"] / vol_ma
+    regime = pd.Series(np.nan, index=df.index)
+    regime[ratio > 1 + flat_band] = 1
+    regime[ratio < 1 - flat_band] = -1
+    regime[(ratio >= 1 - flat_band) & (ratio <= 1 + flat_band)] = 0
+    return regime
+
+
 def add_indicators(df):
     df = df.copy()
     df["sma20"] = sma(df["actual"], 20)
     df["macd_hist"] = macd_histogram(df["actual"])
+    # --- volume filters, additive on top of the two above ---
+    df["cmf"] = cmf(df, CMF_WINDOW)
+    df["vol_regime"] = volume_regime(df, VOL_MA_WINDOW, VOL_FLAT_BAND)
     return df
 
 
@@ -117,7 +210,7 @@ def apply_hysteresis(desired_position, min_hold_bars):
     return position
 
 
-def simulate(df, slippage_pct, use_filter):
+def simulate(df, slippage_pct, use_filter, use_cmf=False, use_volume_veto=False):
     df = df.copy()
     df["prev_actual"] = df["actual"].shift(1)
     df = df.dropna(subset=["prev_actual"]).reset_index(drop=True)
@@ -129,8 +222,16 @@ def simulate(df, slippage_pct, use_filter):
         trend_dir = np.sign(df["actual"] - df["sma20"])
         macd_dir = np.sign(df["macd_hist"])
         agree = (kronos_dir == trend_dir) & (kronos_dir == macd_dir)
+        if use_cmf:
+            # 4th sign-agreement gate, same shape as trend_dir/macd_dir above
+            cmf_dir = np.sign(df["cmf"])
+            agree = agree & (kronos_dir == cmf_dir)
         big_enough = pred_ret.abs() >= (MIN_MOVE_PCT / 100.0)
         desired_position = np.where(agree & big_enough, kronos_dir, 0)
+        if use_volume_veto:
+            # low-conviction veto -- flat volume forces flat position
+            # regardless of what the direction-agreement filters say
+            desired_position = np.where(df["vol_regime"].values == 0, 0, desired_position)
         df["position"] = apply_hysteresis(desired_position, MIN_HOLD_BARS)
     else:
         df["position"] = kronos_dir
@@ -196,6 +297,18 @@ def resolve_window(full_df, start, end):
 
 def main():
     all_rows = []
+    volume_cache = {}  # interval -> volume_df, avoids re-fetching per window
+
+    vol_label_parts = []
+    if USE_CMF_FILTER:
+        vol_label_parts.append("CMF")
+    if USE_VOLUME_VETO:
+        vol_label_parts.append("VolVeto")
+    vol_variant_label = (
+        f"Filtered+{'+'.join(vol_label_parts)}+Hysteresis" if vol_label_parts
+        else "Filtered+Hysteresis (volume off)"
+    )
+
     for window_label, start, end in WINDOWS:
         window_slug = window_label.lower().split(" ")[0].replace("(", "").replace(")", "")
         print("\n" + "#" * 90)
@@ -205,10 +318,22 @@ def main():
         for interval, label in INTERVALS.items():
             csv_path = os.path.join(OUT_DIR, f"btc_{interval}_results.csv")
             full_df = pd.read_csv(csv_path, parse_dates=["timestamp"])
+
+            if interval not in volume_cache:
+                print(f"  Fetching volume data for {label} ({interval}) ...")
+                volume_cache[interval] = fetch_volume_data(
+                    interval, full_df["timestamp"].min(), full_df["timestamp"].max()
+                )
+            full_df = full_df.merge(volume_cache[interval], on="timestamp", how="left")
             full_df = add_indicators(full_df)
 
             window_df = resolve_window(full_df, start, end)
-            window_df = window_df.dropna(subset=["sma20", "macd_hist"]).reset_index(drop=True)
+            required_cols = ["sma20", "macd_hist"]
+            if USE_CMF_FILTER:
+                required_cols.append("cmf")
+            if USE_VOLUME_VETO:
+                required_cols.append("vol_regime")
+            window_df = window_df.dropna(subset=required_cols).reset_index(drop=True)
             if len(window_df) < 5:
                 print(f"\n=== {label} ({interval}) — {window_label}: skipped, only {len(window_df)} bars ===")
                 continue
@@ -218,8 +343,13 @@ def main():
             for slip in SLIPPAGE_SCENARIOS:
                 base_df, base_m = simulate(window_df, slip, use_filter=False)
                 filt_df, filt_m = simulate(window_df, slip, use_filter=True)
+                vol_df_sim, vol_m = simulate(
+                    window_df, slip, use_filter=True,
+                    use_cmf=USE_CMF_FILTER, use_volume_veto=USE_VOLUME_VETO,
+                )
                 curves[f"Unfiltered ({slip:.2f}% slip)"] = base_df
                 curves[f"Filtered+Hysteresis ({slip:.2f}% slip)"] = filt_df
+                curves[f"{vol_variant_label} ({slip:.2f}% slip)"] = vol_df_sim
 
                 print(f"  Slippage {slip:.2f}%:")
                 print(f"    Unfiltered:         final=${base_m['final_equity']:,.2f} ({base_m['total_return_pct']:+.2f}%), "
@@ -228,11 +358,16 @@ def main():
                 print(f"    Filtered+Hysteresis: final=${filt_m['final_equity']:,.2f} ({filt_m['total_return_pct']:+.2f}%), "
                       f"trades={filt_m['num_trades']}, active_bars={filt_m['active_bars']}/{filt_m['total_bars']}, "
                       f"win_rate={filt_m['win_rate_pct']:.1f}%")
+                print(f"    {vol_variant_label}: final=${vol_m['final_equity']:,.2f} ({vol_m['total_return_pct']:+.2f}%), "
+                      f"trades={vol_m['num_trades']}, active_bars={vol_m['active_bars']}/{vol_m['total_bars']}, "
+                      f"win_rate={vol_m['win_rate_pct']:.1f}%")
 
                 all_rows.append({"Window": window_label, "Interval": label, "Slippage %": slip,
                                   "Strategy": "Unfiltered", **base_m})
                 all_rows.append({"Window": window_label, "Interval": label, "Slippage %": slip,
                                   "Strategy": "Filtered+Hysteresis", **filt_m})
+                all_rows.append({"Window": window_label, "Interval": label, "Slippage %": slip,
+                                  "Strategy": vol_variant_label, **vol_m})
 
             print(f"  Buy & Hold: final=${base_m['buy_hold_final_equity']:,.2f} ({base_m['buy_hold_return_pct']:+.2f}%)")
             path = plot_equity(interval, label, window_label, window_slug, curves)
