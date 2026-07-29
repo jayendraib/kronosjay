@@ -30,14 +30,8 @@ sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 from model import Kronos, KronosTokenizer, KronosPredictor  # noqa: E402
 
 SYMBOL = "BTCUSDT"
-TEST_DAYS = 182  # ~6 months back from today
-TOKENIZER_NAME = os.environ.get("KRONOS_TOKENIZER_NAME", "NeoQuasar/Kronos-Tokenizer-base")
-MODEL_NAME = os.environ.get("KRONOS_MODEL_NAME", "NeoQuasar/Kronos-small")
-# KRONOS_OUT_SUBDIR lets a second model's outputs land in their own subfolder instead of
-# overwriting the default model's *_results.csv / *_backtest.png files.
-_OUT_SUBDIR = os.environ.get("KRONOS_OUT_SUBDIR", "")
-OUT_DIR = os.path.join(os.path.dirname(__file__), "accuracy_backtest_output", _OUT_SUBDIR) if _OUT_SUBDIR \
-    else os.path.join(os.path.dirname(__file__), "accuracy_backtest_output")
+TEST_DAYS = 30
+OUT_DIR = os.path.join(os.path.dirname(__file__), "accuracy_backtest_output")
 
 # context_len: bars of history fed to the model before each forecast block
 # block_len:   bars forecast per block (and the stride between blocks)
@@ -200,9 +194,9 @@ def plot_result(result, metrics, interval, cfg):
 
 
 def main():
-    print(f"Loading {MODEL_NAME} + {TOKENIZER_NAME} ...")
-    tokenizer = KronosTokenizer.from_pretrained(TOKENIZER_NAME)
-    model = Kronos.from_pretrained(MODEL_NAME)
+    print("Loading Kronos-base + Kronos-Tokenizer-base ...")
+    tokenizer = KronosTokenizer.from_pretrained("NeoQuasar/Kronos-Tokenizer-base")
+    model = Kronos.from_pretrained("NeoQuasar/Kronos-small")
     predictor = KronosPredictor(model, tokenizer, max_context=512)
 
     summary = {}
