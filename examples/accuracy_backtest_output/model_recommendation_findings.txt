@@ -1,0 +1,67 @@
+FINAL RECOMMENDATION: Kronos-small vs. Kronos-base
+=====================================================
+Pulled together from: pnl_compare_all.py (1-month windows, both
+filtered and unfiltered) and pnl_compare_all_6mo.py (full 6-month
+period, both filtered and unfiltered). All numbers below are the
+Filtered+Hysteresis strategy at 0.20% slippage (the realistic scenario)
+unless noted -- the Unfiltered strategy is not a viable strategy for
+either model (loses 90-100% of capital at hourly/15-min in both cases),
+so it isn't part of the recommendation, only shown for completeness.
+
+---------------------------------------------------------
+6 MONTHS (largest, most reliable sample -- 182 blocks hourly/15-min, 36 daily)
+---------------------------------------------------------
+Granularity | Model | Final $   | Return   | Win Rate | Winner
+Daily       | Small | 11,364.49 | +13.64%  | 60.0%    | Small (slim edge, within noise)
+Daily       | Base  | 11,101.66 | +11.02%  | 60.0%    |
+Hourly      | Small | 14,272.58 | +42.73%  | 58.8%    | Small (clear win)
+Hourly      | Base  | 12,247.86 | +22.48%  | 59.1%    |
+15-Minute   | Small |  3,923.06 | -60.77%  | 57.4%    | Small (less bad, still a loss)
+15-Minute   | Base  |  3,174.20 | -68.26%  | 58.1%    |
+
+---------------------------------------------------------
+1 MONTH -- Down-Trend (Jun 2026, apples-to-apples dates for both models)
+---------------------------------------------------------
+Granularity | Model | Final $   | Return   | Win Rate | Winner
+Daily       | Small |  9,850.38 |  -1.50%  | 50.0%    | Base
+Daily       | Base  | 10,299.55 |  +3.00%  | 71.4%    |
+Hourly      | Small |  9,974.76 |  -0.25%  | 59.2%    | Base
+Hourly      | Base  | 10,409.99 |  +4.10%  | 59.2%    |
+15-Minute   | Small |  9,244.05 |  -7.56%  | 56.9%    | Small
+15-Minute   | Base  |  8,340.05 | -16.60%  | 57.4%    |
+
+---------------------------------------------------------
+1 MONTH -- Recent (uptrend; CAVEAT: small/base data pulled 1 day apart,
+not perfectly apples-to-apples, treat as directional only)
+---------------------------------------------------------
+Granularity | Model | Final $   | Return   | Win Rate | Winner
+Daily       | Small | 10,352.77 |  +3.53%  | 66.7%    | Base
+Daily       | Base  | 10,566.49 |  +5.66%  | 56.2%    |
+Hourly      | Small | 10,550.67 |  +5.51%  | 63.6%    | Small
+Hourly      | Base  | 10,096.46 |  +0.96%  | 62.1%    |
+15-Minute   | Small |  7,685.32 | -23.15%  | 57.2%    | Small
+15-Minute   | Base  |  6,966.87 | -30.33%  | 59.4%    |
+
+---------------------------------------------------------
+VERDICT
+---------------------------------------------------------
+The two 1-month snapshots disagree with each other on which model wins
+(Base ahead in the down-trend month at daily/hourly, Small ahead in the
+recent month at hourly/15-min) -- small samples, noisy, exactly what
+you'd expect given the noise-floor analysis from the earlier
+hyperparameter sweep. Neither 1-month window should be trusted alone.
+
+The 6-month result is the one to weight most heavily -- it's by far the
+largest sample of the three tests, and it's unambiguous: Kronos-small
+wins (or ties) at every granularity, most decisively at hourly
+(+42.7% vs. +22.5%, over 6x the gap seen at daily). Kronos-base is also
+~4x the parameters and noticeably slower to run on this CPU-only setup,
+for a result that's flat-out worse over the longest, most reliable test.
+
+RECOMMENDATION: Use Kronos-small, not Kronos-base, paired with the
+indicator filter + hysteresis strategy. Best result found across this
+entire project: hourly, Filtered+Hysteresis, 0.20% slippage -> +42.73%
+over 6 months, 58.8% win rate. Do note this collapses badly at 0.54%
+slippage (hourly filtered: +42.73% -> -79.38%), so this result only
+holds up with low-cost/low-slippage execution -- that's the binding
+constraint on this strategy, not model choice.

@@ -1,0 +1,115 @@
+Indicator-Filtered + Hysteresis Kronos Strategy — Recent Month vs. Down-Trend Month
+=====================================================================================
+Script: examples/pnl_backtest_filtered.py
+Model: Kronos-small predictions, unchanged from the original run.
+Windows tested (each run as its own fresh $10,000 backtest):
+  - "Recent": most recent 30 days of data (an UPTREND -- buy & hold
+    roughly +4.6% to +5.7% depending on granularity).
+  - "Down-Trend (Jun 2026)": 2026-06-01 to 2026-06-30, a clear
+    down-trending month in this same BTC/USDT history (buy & hold
+    roughly -17.9% to -20.7% depending on granularity).
+
+Filter logic (unchanged from the first version, no retraining, pure
+post-processing on Kronos's existing predictions):
+  - Trend filter: actual close vs. its own 20-period SMA.
+  - Momentum filter: MACD(12,26,9) histogram sign.
+  - Magnitude filter: skip predicted moves smaller than 0.05%.
+  A trade is only considered when Kronos's directional call agrees with
+  BOTH filters and clears the magnitude threshold.
+
+NEW — hysteresis: the first version of this filter was found to
+*increase* trade count at 15-minute granularity (131 -> 393) because the
+position kept flipping in/out of flat as the agree/disagree check
+flickered bar to bar. Fixed with a debounce: once a non-flat position is
+opened, it must be held for at least MIN_HOLD_BARS=3 bars before the
+filter is allowed to change it again (see `apply_hysteresis`).
+
+---------------------------------------------------------
+RESULTS
+---------------------------------------------------------
+
+RECENT (uptrend) — 30 days, $10,000 start
+Interval   | Slippage | Strategy            | Final $   | Return   | Trades | Active/Total | Win Rate | Buy&Hold
+Daily      | 0.20%    | Unfiltered          | 9,703.85  | -2.96%   | 10     | 29/29         | 55.2%    | +4.63%
+Daily      | 0.20%    | Filtered+Hysteresis | 10,352.77 | +3.53%   | 9      | 15/29         | 66.7%    | +4.63%
+Daily      | 0.54%    | Unfiltered          | 9,091.30  | -9.09%   | 10     | 29/29         | 55.2%    | +4.63%
+Daily      | 0.54%    | Filtered+Hysteresis | 10,007.78 | +0.08%   | 9      | 15/29         | 66.7%    | +4.63%
+Hourly     | 0.20%    | Unfiltered          | 7,280.14  | -27.20%  | 93     | 719/719       | 50.5%    | +5.60%
+Hourly     | 0.20%    | Filtered+Hysteresis | 10,550.67 | +5.51%   | 74     | 165/719       | 63.6%    | +5.60%
+Hourly     | 0.54%    | Unfiltered          | 3,863.43  | -61.37%  | 93     | 719/719       | 50.5%    | +5.60%
+Hourly     | 0.54%    | Filtered+Hysteresis | 8,198.84  | -18.01%  | 74     | 165/719       | 63.6%    | +5.60%
+15-Minute  | 0.20%    | Unfiltered          | 6,295.61  | -37.04%  | 131    | 2879/2879     | 50.6%    | +5.65%
+15-Minute  | 0.20%    | Filtered+Hysteresis | 7,685.32  | -23.15%  | 338    | 1160/2879     | 57.2%    | +5.65%
+15-Minute  | 0.54%    | Unfiltered          | 2,575.25  | -74.25%  | 131    | 2879/2879     | 50.6%    | +5.65%
+15-Minute  | 0.54%    | Filtered+Hysteresis | 2,419.45  | -75.81%  | 338    | 1160/2879     | 57.2%    | +5.65%
+
+DOWN-TREND (Jun 2026) — 30 days, $10,000 start
+Interval   | Slippage | Strategy            | Final $   | Return   | Trades | Active/Total | Win Rate | Buy&Hold
+Daily      | 0.20%    | Unfiltered          | 8,905.17  | -10.95%  | 8      | 29/29         | 41.4%    | -17.90%
+Daily      | 0.20%    | Filtered+Hysteresis | 9,850.38  | -1.50%   | 3      | 4/29          | 50.0%    | -17.90%
+Daily      | 0.54%    | Unfiltered          | 8,456.37  | -15.44%  | 8      | 29/29         | 41.4%    | -17.90%
+Daily      | 0.54%    | Filtered+Hysteresis | 9,751.30  | -2.49%   | 3      | 4/29          | 50.0%    | -17.90%
+Hourly     | 0.20%    | Unfiltered          | 6,483.95  | -35.16%  | 92     | 719/719       | 52.0%    | -20.65%
+Hourly     | 0.20%    | Filtered+Hysteresis | 9,974.76  | -0.25%   | 98     | 196/719       | 59.2%    | -20.65%
+Hourly     | 0.54%    | Unfiltered          | 3,464.32  | -65.36%  | 92     | 719/719       | 52.0%    | -20.65%
+Hourly     | 0.54%    | Filtered+Hysteresis | 7,144.36  | -28.56%  | 98     | 196/719       | 59.2%    | -20.65%
+15-Minute  | 0.20%    | Unfiltered          | 5,465.49  | -45.35%  | 158    | 2879/2879     | 50.1%    | -20.57%
+15-Minute  | 0.20%    | Filtered+Hysteresis | 9,244.05  | -7.56%   | 336    | 1042/2879     | 56.9%    | -20.57%
+15-Minute  | 0.54%    | Unfiltered          | 1,857.69  | -81.42%  | 158    | 2879/2879     | 50.1%    | -20.57%
+15-Minute  | 0.54%    | Filtered+Hysteresis | 2,941.45  | -70.59%  | 336    | 1042/2879     | 56.9%    | -20.57%
+
+---------------------------------------------------------
+TAKEAWAYS
+---------------------------------------------------------
+1. Hysteresis helped, but only partially fixed the 15-min churn problem.
+   Recent-window 15-min trade count dropped from 393 (no hysteresis) to
+   338 (with hysteresis) -- an improvement, but still well above the
+   unfiltered baseline's 131 trades. A 3-bar (45-minute) minimum hold is
+   too short at 15-min granularity to stop most of the flip-flopping;
+   daily and hourly, where 3 bars is a more meaningful chunk of time (3
+   days / 3 hours), show cleaner trade-count reductions (10->9 daily,
+   93->74 hourly in the recent window).
+
+2. The strategy's real value showed up in the down-trend month, not the
+   uptrend one. In June's crash, Filtered+Hysteresis dramatically
+   outperformed buy & hold at low slippage across every granularity:
+   daily -1.5% vs. buy&hold -17.9%, hourly -0.25% vs. -20.65%, 15-min
+   -7.56% vs. -20.57%. This makes sense -- the filter's trend/momentum
+   agreement requirement naturally keeps the strategy flat or short
+   during a sustained decline, which is exactly when "just holding BTC"
+   hurts most. This is the clearest evidence yet that the filter adds
+   real value: capital protection in adverse regimes, even though
+   Kronos's raw directional accuracy hasn't changed.
+
+3. Higher slippage still erodes the gains, especially at high trade
+   frequency. At 0.54% slippage, the down-trend hourly result flips from
+   beating buy & hold (-0.25%) to trailing it (-28.56%), and 15-min goes
+   from -7.56% to -70.59%. The strategy is genuinely useful at
+   realistic/low slippage but is not robust to a high-cost execution
+   environment, particularly at 15-minute granularity where trade count
+   is still elevated.
+
+4. The uptrend month remains the weak spot: Filtered+Hysteresis beat
+   unfiltered everywhere, and beat buy & hold at daily/hourly and low
+   slippage, but never caught up to buy & hold at 15-min, and lost to it
+   at high slippage everywhere except daily. A strategy that spends most
+   of its time flat by design will structurally lag a strong sustained
+   uptrend -- that's an expected, acceptable tradeoff if the goal is
+   downside protection, not a flaw to "fix."
+
+Recommended next steps if pursuing this further:
+  - Increase MIN_HOLD_BARS specifically for 15-min (e.g. 8-12 bars ~ 2-3
+    hours) rather than using one global constant across all
+    granularities -- the current fix under-hilds at high frequency.
+  - Test a sideways/choppy month too, to see how the filter behaves when
+    there's no strong trend in either direction (the two windows tested
+    so far are both trending, just in opposite directions).
+  - Consider position sizing by signal strength instead of a binary
+    trade/no-trade call, especially to reduce the 15-min churn without
+    just brute-forcing a longer hold period.
+
+Artifacts:
+  Charts: btc_{1d,1h,15m}_pnl_filtered_recent.png,
+          btc_{1d,1h,15m}_pnl_filtered_down-trend.png
+  Data:   pnl_filtered_summary.csv
+  Script: examples/pnl_backtest_filtered.py

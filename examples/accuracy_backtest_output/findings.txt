@@ -1,0 +1,70 @@
+Kronos-small BTC/USDT Backtest Findings
+=========================================
+Run date: 2026-07-28
+Model: NeoQuasar/Kronos-small (tokenizer: NeoQuasar/Kronos-Tokenizer-base)
+Test window: ~6 months back from run date (TEST_DAYS=182)
+Symbol: BTCUSDT (Binance public REST API)
+Market regime note: BTC was in a downtrend over this window
+  (buy & hold return was roughly -25% to -28% across all three granularities).
+
+Scripts used:
+  examples/backtest_btc_accuracy.py  -> walk-forward accuracy backtest
+  examples/pnl_backtest.py           -> directional long/short P&L simulation on top of it
+
+---------------------------------------------------------
+1. ACCURACY BACKTEST (walk-forward, non-overlapping blocks)
+---------------------------------------------------------
+
+Granularity | context_len | block_len | #blocks | MAE     | RMSE    | MAPE  | Dir.Acc | Corr
+Daily       | 90          | 5         | 36      | 3114.64 | 4193.54 | 4.45% | 49.31%  | 0.796
+Hourly      | 168         | 24        | 182     | 1086.35 | 1509.70 | 1.55% | 49.76%  | 0.973
+15-Minute   | 192         | 96        | 182     | 1113.13 | 1565.93 | 1.60% | 50.87%  | 0.971
+
+Takeaway: price-level correlation is high (model tracks the general level/trend
+of price well), but directional accuracy on the *next bar* sits at ~49-51%
+across all granularities -- essentially coin-flip. The model is not adding
+directional edge at the bar level, even though it fits the overall series shape.
+
+---------------------------------------------------------
+2. P&L BACKTEST (simple long/short-per-bar strategy, $10,000 start)
+---------------------------------------------------------
+Strategy: at each bar, go long if Kronos predicted a higher close than the
+last known real close, short if lower. Apply that bar's real return, minus
+a slippage/fee cost on every position change.
+
+Interval   | Slippage | Final $  | Return   | Trades | Win Rate | Buy&Hold Return
+Daily      | 0.20%    | 6,780.38 | -32.20%  | 35     | 43.6%    | -24.72%
+Daily      | 0.54%    | 5,348.19 | -46.52%  | 35     | 43.6%    | -24.72%
+Hourly     | 0.20%    |   996.82 | -90.03%  | 489    | 50.5%    | -27.90%
+Hourly     | 0.54%    |    35.06 | -99.65%  | 489    | 50.5%    | -27.90%
+15-Minute  | 0.20%    |   207.96 | -97.92%  | 974    | 50.8%    | -27.75%
+15-Minute  | 0.54%    |     0.26 | -100.00% | 974    | 50.8%    | -27.75%
+
+Takeaway: the strategy underperformed plain buy & hold at every granularity
+and slippage level tested. Underperformance is worst at higher trade
+frequency (hourly, 15-min), where slippage compounds on top of a
+directional edge that is statistically no better than a coin flip,
+driving the account toward total loss. Daily is the least bad of the
+three but still trails buy & hold.
+
+---------------------------------------------------------
+3. CONCLUSION
+---------------------------------------------------------
+As configured (naive long/short-every-bar on Kronos-small's directional
+prediction, no confidence filtering, no position sizing, no trend/regime
+filter), this is not a viable trading strategy. The ~50% directional
+accuracy cannot absorb even 0.20% round-trip slippage once trade frequency
+rises. Any future attempt should consider:
+  - Filtering trades by prediction confidence/magnitude instead of trading
+    every single bar
+  - Position sizing or a minimum-move threshold before acting
+  - Testing Kronos-base/large for comparison against Kronos-small
+  - Testing across bull and sideways regimes, not just this downtrend window
+  - Reducing trade frequency to cut slippage drag
+
+---------------------------------------------------------
+Artifacts
+---------------------------------------------------------
+Charts: btc_{1d,1h,15m}_backtest.png, btc_{1d,1h,15m}_pnl.png
+Raw data: btc_{1d,1h,15m}_results.csv
+All in: examples/accuracy_backtest_output/

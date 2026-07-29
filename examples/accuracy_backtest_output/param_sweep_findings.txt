@@ -1,0 +1,114 @@
+Kronos-small Sampling Hyperparameter Sweep Findings
+====================================================
+Run date: 2026-07-28
+Model: NeoQuasar/Kronos-small (tokenizer: NeoQuasar/Kronos-Tokenizer-base)
+Script: examples/sweep_kronos_params.py
+Granularity: Daily (BTCUSDT), context_len=90, block_len=5, 36 walk-forward
+             blocks over the most recent ~182 days -- same config as the
+             daily row in examples/accuracy_backtest_output/findings.txt,
+             chosen so results are directly comparable to that baseline.
+Wall-clock time: ~14 minutes total (model load + data fetch + 49 combos +
+                 a follow-up reproducibility check), well under the 1-hour
+                 budget. Per-combo cost on CPU (12 cores, torch using 6
+                 threads): ~6s at sample_count=1, ~19s at sample_count=3,
+                 ~34s at sample_count=5, for 36 batched blocks.
+
+---------------------------------------------------------
+1. GRID TESTED
+---------------------------------------------------------
+Stage 1 (coarse, 24 combos):
+  T:             {0.6, 0.8, 1.0, 1.2}
+  top_p:         {0.8, 0.9, 1.0}
+  sample_count:  {1, 3}
+
+Stage 2 (refinement around the stage-1 leader, 25 combos):
+  T:             {0.9, 1.0, 1.1}   (+/-0.1 around best-so-far)
+  top_p:         {0.85, 0.9, 0.95} (+/-0.05 around best-so-far)
+  sample_count:  {1, 3, 5}
+
+Total: 49 unique combos. Full per-combo results (MAE, RMSE, MAPE,
+DirectionalAccuracy, Correlation, elapsed_sec) are in
+param_sweep_results.csv in this directory.
+
+---------------------------------------------------------
+2. HEADLINE RESULT: NO COMBO RELIABLY BEATS A COIN FLIP
+---------------------------------------------------------
+Across all 49 combos:
+  DirectionalAccuracy: mean=47.01%, std=4.00pp, min=35.42%, max=54.17%
+
+The theoretical standard deviation of a 50%-coin-flip proportion estimated
+from n=144 independent bar-direction calls (36 blocks x 4 within-block
+diffs each, exactly how compute_metrics() computes it) is
+sqrt(0.25/144) = 4.16 percentage points -- essentially identical to the
+4.00pp spread actually observed across 49 different (T, top_p,
+sample_count) combos. In other words, the entire 35-54% range seen in
+this sweep is consistent with pure sampling noise around 50%, not a real
+effect of the hyperparameters being varied.
+
+Breaking down by sample_count alone confirms this -- no monotonic or
+otherwise meaningful trend:
+  sample_count=1: mean=46.88%, std=2.85pp (n=20)
+  sample_count=3: mean=47.43%, std=5.31pp (n=20)
+  sample_count=5: mean=46.37%, std=2.96pp (n=9)
+Averaging more sampled paths (higher sample_count) did not systematically
+improve directional accuracy; if anything it added variance (sc=3 has the
+widest spread) without moving the mean.
+
+DirectionalAccuracy vs. MAE across combos: correlation = 0.18 (weak) --
+the combos with the "best" directional accuracy are not reliably the
+combos with the best price-level error either, another sign these are
+independent noisy quantities rather than a coherent quality axis.
+
+---------------------------------------------------------
+3. REPRODUCIBILITY CHECK ON THE "WINNING" COMBO
+---------------------------------------------------------
+The single best result in the whole sweep was T=0.9, top_p=0.85,
+sample_count=3 -> DirAcc=54.17%, MAE=3088.2, Corr=0.788. Since Kronos's
+autoregressive sampling is stochastic and NOT seeded between runs, this
+result was re-run 3 more times with the identical parameters to check
+whether it reproduces:
+
+  T=0.9, top_p=0.85, sample_count=3 (3 fresh repeats):
+    rep1: DirAcc=45.14%  rep2: DirAcc=43.06%  rep3: DirAcc=40.97%
+
+For comparison, the baseline (T=1.0, top_p=0.9, sample_count=1) was also
+re-run 3 times:
+  rep1: DirAcc=43.06%  rep2: DirAcc=49.31%  rep3: DirAcc=43.75%
+
+The "winning" combo's repeats (41-45%) are no better than -- and if
+anything slightly worse than -- the baseline's repeats (43-49%). The
+54.17% result that stood out in the sweep table did not reproduce at all;
+it was a favorable random draw, not a real property of that parameter
+combination. This directly confirms the noise-floor argument in section 2
+using a completely independent test.
+
+---------------------------------------------------------
+4. RECOMMENDATION
+---------------------------------------------------------
+Do not change the current defaults (T=1.0, top_p=0.9, sample_count=1).
+No combination of T in [0.6, 1.2], top_p in [0.8, 1.0], or sample_count
+in [1, 5] produced a directional-accuracy improvement over baseline that
+survived a basic reproducibility check. Raising sample_count from 1 to 3
+or 5 multiplies compute cost (~3x / ~5x) for no measurable directional
+benefit, so it is not worth the extra CPU time on this task.
+
+Honest bottom line: directional accuracy for Kronos-small on daily
+BTC/USDT next-bar prediction never meaningfully cleared ~50% under any
+sampling hyperparameters tested. This is consistent with, and reinforces,
+the original findings.txt conclusion -- the ~49-51% directional accuracy
+ceiling looks like a property of the model/task (next-bar direction on
+this series is close to unpredictable from Kronos-small's own confidence
+distribution), not an artifact of poorly-tuned softmax temperature,
+nucleus sampling threshold, or sample averaging. Any further attempt to
+find directional edge should look elsewhere -- e.g. a larger model
+(Kronos-base/large), longer prediction horizons where trend rather than
+next-bar direction matters, additional input features, or accepting that
+next-bar directional trading on this model/asset/granularity is not
+viable and reframing the strategy around price-level tracking instead.
+
+---------------------------------------------------------
+Artifacts
+---------------------------------------------------------
+Sweep script:  examples/sweep_kronos_params.py
+Full results:  examples/accuracy_backtest_output/param_sweep_results.csv
+This file:     examples/accuracy_backtest_output/param_sweep_findings.txt

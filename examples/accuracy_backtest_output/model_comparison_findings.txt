@@ -1,0 +1,71 @@
+Kronos-small vs. Kronos-base — Accuracy Comparison
+=====================================================
+Scripts: examples/backtest_btc_accuracy.py (run twice, once per model,
+         via KRONOS_MODEL_NAME/KRONOS_OUT_SUBDIR env vars) +
+         examples/compare_kronos_models.py
+Test window: ~182 days (6 months) BTC/USDT, same walk-forward setup
+             (context_len/block_len) as all prior runs.
+Kronos-small results: examples/accuracy_backtest_output/btc_*_results.csv
+Kronos-base results:  examples/accuracy_backtest_output/kronos-base/btc_*_results.csv
+
+---------------------------------------------------------
+RESULTS
+---------------------------------------------------------
+Model        | Granularity | MAE      | RMSE     | MAPE  | Dir.Acc | Corr
+Kronos-base  | Daily       | 3483.347 | 4730.461 | 5.023 | 52.78%  | 0.728
+Kronos-small | Daily       | 3261.489 | 4572.432 | 4.678 | 47.22%  | 0.765
+Kronos-base  | Hourly      | 1017.573 | 1463.510 | 1.465 | 49.59%  | 0.974
+Kronos-small | Hourly      | 1086.350 | 1509.700 | 1.554 | 49.76%  | 0.973
+Kronos-base  | 15-Minute   | 1002.649 | 1477.225 | 1.439 | 50.60%  | 0.973
+Kronos-small | 15-Minute   | 1113.132 | 1565.931 | 1.597 | 50.87%  | 0.971
+
+Directional accuracy delta (base - small):
+  Daily:      +5.56pp (base better)
+  Hourly:     -0.17pp (essentially tied)
+  15-Minute:  -0.27pp (essentially tied)
+
+---------------------------------------------------------
+INTERPRETATION
+---------------------------------------------------------
+1. Hourly and 15-minute: directional accuracy is statistically identical
+   between the two model sizes (deltas well under 1pp). Given the
+   hyperparameter-sweep finding (examples/accuracy_backtest_output/
+   param_sweep_findings.txt) that ~4pp of spread is just sampling noise
+   at this kind of sample size, a <0.3pp gap is not a real difference --
+   Kronos-base (4x the params of Kronos-small) buys NOTHING on
+   directional accuracy at these granularities.
+
+2. Daily shows a +5.56pp gap in base's favor, which superficially looks
+   more interesting, but it's right at the edge of the noise floor
+   established by the sweep (~4.16pp for this sample size), AND the
+   Kronos-small daily numbers here differ slightly from the very first
+   findings.txt run (49.3% there vs. 47.2% here) purely because that
+   file got regenerated once already with fresh unseeded sampling (see
+   the caveat noted during the parameter-sweep work). With that much
+   run-to-run wobble already documented on the small side alone, a
+   single-run 5.56pp gap on daily is suggestive at best, not confirmed --
+   would need repeated runs (like the sweep's reproducibility check) to
+   trust it.
+
+3. Error metrics (MAE/RMSE/MAPE) lean slightly in base's favor at hourly
+   and 15-minute, slightly in small's favor at daily. None of the gaps
+   are large relative to the price scale (BTC ~$60-80k over this
+   period).
+
+4. Cost/benefit: Kronos-base is meaningfully slower to run (4x the
+   parameters of Kronos-small, same CPU-only environment) for a
+   directional-accuracy improvement that doesn't clear the noise floor
+   at 2 of 3 granularities and is unconfirmed at the third. Not a clear
+   win.
+
+---------------------------------------------------------
+CONCLUSION
+---------------------------------------------------------
+Consistent with the earlier finding that the ~50% directional-accuracy
+ceiling looks like a property of the model family/task on this data, not
+something fixable by tuning: it also isn't fixed by moving to a larger
+pretrained checkpoint. Kronos-base is not a clear upgrade over
+Kronos-small for this specific goal (predicting next-bar BTC direction).
+If pursuing model-size effects further, the daily result is the one
+result worth re-checking with repeat runs before drawing conclusions --
+everything else here is a tie.

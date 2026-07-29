@@ -1,0 +1,75 @@
+Kronos-small vs. Kronos-base — PnL Comparison (naive strategy, full 6 months)
+================================================================================
+Script: examples/pnl_compare_small_vs_base.py (reuses the exact simulate()
+        strategy from pnl_backtest.py: go long if the model predicted a
+        higher close than the last real close, short if lower, apply
+        real return minus slippage on every position change)
+Data: same 6-month walk-forward *_results.csv files used for the earlier
+      accuracy comparison (model_comparison_findings.txt).
+
+CAVEAT before reading the numbers: Kronos-small's and Kronos-base's
+backtests were run on different days, each pulling the "last 182 days"
+of live BTC data from Binance at run time -- so their exact date ranges
+and buy & hold returns are close but not identical (e.g. daily buy & hold
+-25.17% for the small run vs. -18.72% for the base run). Also note
+Kronos-small's daily results.csv was regenerated once already (see
+kronos_directional_accuracy_finding memory / param-sweep findings) due to
+an earlier accidental re-run, so its daily numbers here differ slightly
+from the very first pnl_backtest.py run. None of this changes the
+qualitative conclusion below, but exact percentages aren't perfectly
+apples-to-apples across models.
+
+---------------------------------------------------------
+RESULTS ($10,000 start each)
+---------------------------------------------------------
+Interval   | Slippage | Model        | Final $  | Return   | Trades | Win Rate | Buy&Hold
+Daily      | 0.20%    | Kronos-small | 6,233.82 | -37.66%  | 39     | 46.4%    | -25.17%
+Daily      | 0.20%    | Kronos-base  | 7,578.72 | -24.21%  | 46     | 49.7%    | -18.72%
+Daily      | 0.54%    | Kronos-small | 4,783.88 | -52.16%  | 39     | 46.4%    | -25.17%
+Daily      | 0.54%    | Kronos-base  | 5,547.98 | -44.52%  | 46     | 49.7%    | -18.72%
+Hourly     | 0.20%    | Kronos-small |   996.82 | -90.03%  | 489    | 50.5%    | -27.90%
+Hourly     | 0.20%    | Kronos-base  |   985.84 | -90.14%  | 521    | 50.6%    | -28.34%
+Hourly     | 0.54%    | Kronos-small |    35.06 | -99.65%  | 489    | 50.5%    | -27.90%
+Hourly     | 0.54%    | Kronos-base  |    27.83 | -99.72%  | 521    | 50.6%    | -28.34%
+15-Minute  | 0.20%    | Kronos-small |   207.96 | -97.92%  | 974    | 50.8%    | -27.75%
+15-Minute  | 0.20%    | Kronos-base  |    97.88 | -99.02%  | 1085   | 51.0%    | -28.04%
+15-Minute  | 0.54%    | Kronos-small |     0.26 | -100.00% | 974    | 50.8%    | -27.75%
+15-Minute  | 0.54%    | Kronos-base  |     0.06 | -100.00% | 1085   | 51.0%    | -28.04%
+
+---------------------------------------------------------
+WHAT THIS MEANS
+---------------------------------------------------------
+1. At hourly and 15-minute, Kronos-small and Kronos-base are
+   essentially interchangeable disasters -- both lose 90-100% of the
+   account with the naive every-bar strategy, both have ~50% win rate,
+   and base even racks up slightly MORE trades (521 vs 489 hourly, 1085
+   vs 974 15-min) because its slightly different predictions flip
+   direction more often. This matches the accuracy comparison finding:
+   base's directional accuracy is a statistical tie with small's at
+   these granularities, so there's no reason to expect (and no evidence
+   of) a PnL improvement either -- if anything it's marginally worse
+   here due to more trades/slippage.
+
+2. At daily, Kronos-base does look better in this run (-24.21% vs.
+   -37.66% at 0.20% slippage) -- consistent with the daily accuracy
+   comparison also favoring base (+5.56pp directional accuracy).
+   BUT: both still lose to buy & hold (-18.72%), the accuracy edge was
+   already flagged as borderline/noise-level and unconfirmed without
+   repeat runs, and part of the daily gap here is muddied by the
+   different buy & hold baselines from the two separate live-data
+   pulls. Treat "base is better at daily" as a lead worth re-testing,
+   not a settled result.
+
+3. Bottom line, in plain terms: swapping to the bigger model does NOT
+   turn this naive strategy into a winner anywhere. Hourly/15-min stay
+   catastrophic regardless of model size -- the problem there is
+   trading every single ~coin-flip bar into slippage, not model
+   capacity. The indicator-filter approach already tested
+   (pnl_backtest_filtered.py) addressed that failure mode directly and
+   far more effectively than switching models did; model size was
+   never the bottleneck for this strategy.
+
+Artifacts:
+  Charts: btc_{1d,1h,15m}_pnl_small_vs_base.png
+  Data:   pnl_small_vs_base_summary.csv
+  Script: examples/pnl_compare_small_vs_base.py
